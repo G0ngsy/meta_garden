@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises'
 import { resolve, extname } from 'node:path'
 import { chromium } from '@playwright/test'
 
-test('offline first visit, server shutdown, mobile controls, update and failed caching', { timeout: 120000 }, async t => {
+test('offline first visit, server shutdown, mobile controls, update and failed caching', { timeout: 180000 }, async t => {
   let version = 1
   let failIcon = false
   const dist = resolve('dist')
@@ -36,12 +36,13 @@ test('offline first visit, server shutdown, mobile controls, update and failed c
     await page.goto(url)
     await page.getByRole('status').filter({ hasText: '오프라인 산책 준비 완료' }).waitFor({ timeout: 30000 })
     await page.locator('canvas').waitFor()
-    const nickname = await page.locator('.visitor').innerText()
+    await page.locator('.nameplate').waitFor({ timeout: 30000 })
+    const nickname = await page.locator('.nameplate').innerText()
     await page.getByRole('button', { name: '설치 방법' }).click()
     await page.getByText('홈 화면에 정원을 담아보세요').waitFor()
     await page.getByRole('button', { name: '안내 닫기' }).click()
     await page.getByRole('button', { name: '카메라 시점 전환' }).click()
-    assert.match(await page.locator('.camera').innerText(), /3인칭/)
+    assert.match(await page.locator('.camera').innerText(), /쿼터뷰/)
     const forward = page.getByRole('button', { name: '앞으로', exact: true })
     assert.equal(await forward.isVisible(), true)
     await forward.scrollIntoViewIfNeeded()
@@ -49,19 +50,30 @@ test('offline first visit, server shutdown, mobile controls, update and failed c
     assert.ok(bounds && bounds.width >= 44 && bounds.height >= 44)
     // Hold a real pointer and compare the rendered scene after the camera settles.
     await page.waitForTimeout(1600)
-    const before = await page.locator('canvas').screenshot()
+    const before = await page.locator('.nameplate').getAttribute('data-z')
     await page.mouse.move(bounds.x + 22, bounds.y + 22)
     await page.mouse.down()
-    await page.waitForTimeout(900)
-    await page.mouse.up()
+    try { await page.waitForFunction(start => document.querySelector('.nameplate')?.getAttribute('data-z') !== start, before, { timeout: 10000 }) }
+    finally { await page.mouse.up() }
     await page.waitForTimeout(1200)
-    const after = await page.locator('canvas').screenshot()
-    assert.notDeepEqual(before, after, 'touch hold must move the rendered player/camera')
+    const after = await page.locator('.nameplate').getAttribute('data-z')
+    assert.notEqual(before, after, 'touch hold must move the player')
+    await page.waitForTimeout(300)
+    assert.equal(await page.locator('.nameplate').getAttribute('data-z'), after, 'release must stop movement')
+    await page.getByRole('button', { name: '카메라 시점 전환' }).click()
+    await page.waitForTimeout(800)
+    const canvas = await page.locator('canvas').boundingBox()
+    const oldYaw = await page.locator('.nameplate').getAttribute('data-yaw')
+    await page.mouse.move(canvas.x + 200, canvas.y + 260)
+    await page.mouse.down(); await page.mouse.move(canvas.x + 270, canvas.y + 260, { steps: 8 }); await page.mouse.up()
+    await page.waitForTimeout(300)
+    assert.notEqual(await page.locator('.nameplate').getAttribute('data-yaw'), oldYaw, 'drag must orbit the camera')
     await page.screenshot({ path: '../../outputs/pwa-mobile.png', fullPage: true })
     await context.setOffline(true)
     await page.reload()
     await page.getByRole('status').filter({ hasText: '오프라인 산책 중' }).waitFor()
-    assert.equal(await page.locator('.visitor').innerText(), nickname, 'visitor survives offline reload')
+    await page.locator('.nameplate').waitFor()
+    assert.equal(await page.locator('.nameplate').innerText(), nickname, 'visitor survives offline reload')
     await context.setOffline(false)
     await stop()
     await page.reload()
@@ -76,6 +88,24 @@ test('offline first visit, server shutdown, mobile controls, update and failed c
     await page.getByRole('status').filter({ hasText: '오프라인 산책 준비 완료' }).waitFor()
     await page.waitForFunction(async () => (await caches.keys()).every(key => !key.startsWith('meta-garden-') || key.startsWith('meta-garden-next-')))
     assert.deepEqual(errors, [])
+    const desktop = await browser.newContext({ viewport: { width: 1440, height: 900 } })
+    const desktopPage = await desktop.newPage()
+    desktopPage.on('pageerror', error => errors.push(error.message))
+    await desktopPage.goto(url)
+    await desktopPage.locator('.nameplate').waitFor({ timeout: 30000 })
+    await desktopPage.waitForTimeout(1000)
+    await desktopPage.screenshot({ path: '../../outputs/garden-immersive-desktop.png' })
+    await desktopPage.bringToFront()
+    await desktopPage.getByRole('button', { name: '카메라 시점 전환' }).click()
+    await desktopPage.getByRole('button', { name: '카메라 시점 전환' }).click()
+    const keyboardStart = await desktopPage.locator('.nameplate').getAttribute('data-z')
+    await desktopPage.keyboard.down('KeyW')
+    try { await desktopPage.waitForFunction(start => document.querySelector('.nameplate')?.getAttribute('data-z') !== start, keyboardStart, { timeout: 10000 }) }
+    finally { await desktopPage.keyboard.up('KeyW') }
+    await desktopPage.waitForTimeout(200)
+    assert.notEqual(await desktopPage.locator('.nameplate').getAttribute('data-z'), keyboardStart, 'desktop keyboard must move the player')
+    assert.deepEqual(errors, [])
+    await desktop.close()
     failIcon = true
     const fresh = await browser.newContext()
     const failurePage = await fresh.newPage()
