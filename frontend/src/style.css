@@ -1,0 +1,9 @@
+:root { font-family: 'Segoe UI', sans-serif; color: #304437; background: #f6f7ef; font-synthesis: none; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { max-width: 1100px; margin: auto; padding: 40px 24px; }
+header span { font-size: 12px; letter-spacing: 3px; font-weight: 700; }
+h1 { font-size: clamp(28px, 5vw, 44px); margin: 16px 0 10px; }
+p, footer { color: #68786a; line-height: 1.7; }
+section { height: 60vh; min-height: 320px; border-radius: 28px; overflow: hidden; margin: 28px 0 18px; }
+footer { font-size: 13px; }
