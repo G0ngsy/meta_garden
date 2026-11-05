@@ -4,6 +4,8 @@ import { Canvas, useFrame } from '@react-three/fiber'
 import { Html } from '@react-three/drei'
 import * as THREE from 'three'
 import './style.css'
+import { PwaPanel } from './PwaPanel'
+import { TouchControls } from './TouchControls'
 
 type V = [number,number,number]
 const trees: [number,number][] = [[-6,-5],[-6,1],[6,3],[2,-6]]
@@ -40,18 +42,19 @@ function blocked(x:number,z:number){
  if(posts.some(([a,b])=>Math.hypot(x-a,z-b)<0.45))return true
  return x>-5.7&&x<-3.3&&z>3.4&&z<4.6
 }
-function Player({third,name,color}:{third:boolean;name:string;color:string}){
+function Player({third,name,color,touch}:{third:boolean;name:string;color:string;touch:React.MutableRefObject<Set<string>>}){
  const root=useRef<THREE.Group>(null), body=useRef<THREE.Group>(null)
  const keys=useRef(new Set<string>()), pos=useRef(new THREE.Vector3(0,0,5.5)), angle=useRef(Math.PI)
  const desired=useRef(new THREE.Vector3()),target=useRef(new THREE.Vector3()),ready=useRef(false),walk=useRef(0)
+ const cameraRay=useRef(new THREE.Raycaster()),cameraDirection=useRef(new THREE.Vector3())
  useEffect(()=>{
  const down=(e:KeyboardEvent)=>{if(['KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)){e.preventDefault();keys.current.add(e.code)}}
  const up=(e:KeyboardEvent)=>{keys.current.delete(e.code)},clear=()=>keys.current.clear()
  window.addEventListener('keydown',down);window.addEventListener('keyup',up);window.addEventListener('blur',clear);document.addEventListener('visibilitychange',clear)
  return()=>{window.removeEventListener('keydown',down);window.removeEventListener('keyup',up);window.removeEventListener('blur',clear);document.removeEventListener('visibilitychange',clear)}
  },[])
- useFrame(({camera},dt)=>{
- const k=keys.current,dx=Number(k.has('KeyD')||k.has('ArrowRight'))-Number(k.has('KeyA')||k.has('ArrowLeft')),dz=Number(k.has('KeyS')||k.has('ArrowDown'))-Number(k.has('KeyW')||k.has('ArrowUp')),len=Math.hypot(dx,dz),p=pos.current
+ useFrame(({camera,scene},dt)=>{
+ const k=keys.current,t=touch.current,dx=Number(k.has('KeyD')||k.has('ArrowRight')||t.has('KeyD'))-Number(k.has('KeyA')||k.has('ArrowLeft')||t.has('KeyA')),dz=Number(k.has('KeyS')||k.has('ArrowDown')||t.has('KeyS'))-Number(k.has('KeyW')||k.has('ArrowUp')||t.has('KeyW')),len=Math.hypot(dx,dz),p=pos.current
  if(len){const step=3*Math.min(dt,0.05)/len;if(!blocked(p.x+dx*step,p.z))p.x+=dx*step;if(!blocked(p.x,p.z+dz*step))p.z+=dz*step;angle.current=Math.atan2(dx,dz);walk.current+=dt*10}
  p.y=Math.abs(p.x)<3.3&&Math.abs(p.z)<0.65?0.46:(p.x>3&&p.x<6&&p.z>-5.6&&p.z<-2.4?0.43:0.07)
  root.current?.position.copy(p)
@@ -59,7 +62,22 @@ function Player({third,name,color}:{third:boolean;name:string;color:string}){
  target.current.set(p.x,p.y+0.9,p.z)
  if(third)desired.current.set(p.x-Math.sin(angle.current)*5,p.y+3.5,p.z-Math.cos(angle.current)*5)
  else desired.current.set(p.x+10,p.y+13,p.z+12)
+ const obstructed=(candidate:THREE.Vector3)=>{
+   cameraDirection.current.subVectors(candidate,target.current)
+   const distance=cameraDirection.current.length()
+   cameraRay.current.set(target.current,cameraDirection.current.normalize())
+   cameraRay.current.far=distance
+   const hit=cameraRay.current.intersectObjects(scene.children,true).find(hit=>{
+     let object:THREE.Object3D|null=hit.object
+     while(object){if(object===root.current)return false;object=object.parent}
+     return hit.distance>0.2
+   })
+   return hit
+ }
+ // Keep the character readable: lift the camera above roofs rather than zooming into their back.
+ if(third&&obstructed(desired.current))desired.current.y=p.y+7
  if(!ready.current){camera.position.copy(desired.current);ready.current=true}else camera.position.lerp(desired.current,1-Math.exp(-dt*5))
+ if(third&&obstructed(camera.position))camera.position.copy(desired.current)
  camera.lookAt(target.current)
  })
  return <group ref={root} position={[0,0,5.5]}><Html position={[0,1.95,0]} center style={{pointerEvents:'none'}}><span className="nameplate">{name}</span></Html><group ref={body}>
@@ -73,12 +91,19 @@ function Player({third,name,color}:{third:boolean;name:string;color:string}){
 }
 function App(){
  const [third,setThird]=useState(false)
- const [identity]=useState(()=>({name:['느긋한','산책하는','졸린','다정한'][Math.floor(Math.random()*4)]+' '+['솔잎','참새','달빛','새싹'][Math.floor(Math.random()*4)],color:['#729d92','#b58e9a','#90a274','#7799b0'][Math.floor(Math.random()*4)]}))
+ const touch=useRef(new Set<string>())
+ const [identity]=useState(()=>{
+   try { const saved=JSON.parse(localStorage.getItem('garden-visitor-v1') || 'null');if(saved&&typeof saved.name==='string'&&saved.name.length<30&&/^#[0-9a-f]{6}$/i.test(saved.color))return saved as {name:string;color:string} }catch { /* Storage may be blocked. */ }
+   return {name:['느긋한','산책하는','졸린','다정한'][Math.floor(Math.random()*4)]+' '+['솔잎','참새','달빛','새싹'][Math.floor(Math.random()*4)],color:['#729d92','#b58e9a','#90a274','#7799b0'][Math.floor(Math.random()*4)]}
+ })
+ useEffect(()=>{try{localStorage.setItem('garden-visitor-v1',JSON.stringify(identity))}catch{/* Walking remains available without storage. */}},[identity])
  useEffect(()=>{const toggle=(e:KeyboardEvent)=>{if(e.code==='KeyC'&&!e.repeat)setThird(v=>!v)};window.addEventListener('keydown',toggle);return()=>window.removeEventListener('keydown',toggle)},[])
  return <main><header><div><span className="eyebrow">META GARDEN · 함께 쉬어가는 곳</span><h1>느긋한 정원 <small>庭</small></h1><p>돌길을 따라 걷고, 잠시 마음을 쉬어가세요.</p></div><div className="visitor"><i style={{background:identity.color}}/>{identity.name}<span>혼자 둘러보는 중</span></div></header>
+ <PwaPanel/>
  <section className="garden" aria-label="한국 전통 정원. WASD 또는 방향키로 이동, C 키로 시점 전환"><div className="scene-label"><span>첫 번째 마당</span><strong>소담한 연못 정원</strong></div>
- <Canvas shadows camera={{position:[10,13,17],fov:45,near:0.1,far:100}} dpr={[1,1.5]}><color attach="background" args={['#e9e9db']}/><fog attach="fog" args={['#e9e9db',30,65]}/><ambientLight intensity={1.5}/><hemisphereLight args={['#fff5df','#798969',1]}/><directionalLight position={[-8,15,8]} intensity={2.2} castShadow shadow-mapSize={[2048,2048]} shadow-camera-left={-13} shadow-camera-right={13} shadow-camera-top={13} shadow-camera-bottom={-13} shadow-normalBias={0.04}/><Garden/><Player third={third} name={identity.name} color={identity.color}/></Canvas>
+ <Canvas shadows camera={{position:[10,13,17],fov:45,near:0.1,far:100}} dpr={[1,1.5]} fallback={<div className="canvas-fallback">이 기기에서 3D 화면을 열 수 없어요. WebGL을 지원하는 브라우저에서 다시 열어주세요.</div>}><color attach="background" args={['#e9e9db']}/><fog attach="fog" args={['#e9e9db',30,65]}/><ambientLight intensity={1.5}/><hemisphereLight args={['#fff5df','#798969',1]}/><directionalLight position={[-8,15,8]} intensity={2.2} castShadow shadow-mapSize={[2048,2048]} shadow-camera-left={-13} shadow-camera-right={13} shadow-camera-top={13} shadow-camera-bottom={-13} shadow-normalBias={0.04}/><Garden/><Player third={third} name={identity.name} color={identity.color} touch={touch}/></Canvas>
+ <TouchControls keys={touch}/>
  <button className="camera" onClick={()=>setThird(v=>!v)} aria-label="카메라 시점 전환">{third?'3인칭':'쿼터뷰'} <span>시점 바꾸기 · C</span></button></section>
- <footer><div><b>W A S D</b> / 방향키로 걷기 <span>·</span> <b>C</b> 시점 전환</div><span>연못은 돌다리를 따라 건너보세요.</span></footer></main>
+ <footer><div className="keyboard-hint"><b>W A S D</b> / 방향키로 걷기 <span>·</span> <b>C</b> 시점 전환</div><div className="touch-hint">방향 버튼을 꾹 누르면 걸어요 · 오른쪽 버튼으로 시점 전환</div><span>연못은 돌다리를 따라 건너보세요.</span></footer></main>
 }
 ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><App/></React.StrictMode>)
